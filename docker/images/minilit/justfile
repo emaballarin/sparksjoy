@@ -1,0 +1,102 @@
+# MinRL Podman Environment
+
+# Container runtime
+runtime := env_var_or_default("RUNTIME", "podman")
+gpu_flags := if runtime == "docker" { "--gpus all" } else { "--device nvidia.com/gpu=all --security-opt=label=disable" }
+
+# Optional mount configuration
+mount_path := env_var_or_default("MOUNT_PATH", "")
+mount_flags := if mount_path != "" { "-v " + mount_path + ":/mnt/data:Z" } else { "" }
+
+# Image configuration
+image_name := env_var_or_default("IMAGE_NAME", "minilit")
+tag := env_var_or_default("TAG", `date +%Y%m%d%H%M%S`)
+registry := env_var_or_default("REGISTRY", "docker.io")
+registry_username := env_var_or_default("REGISTRY_USERNAME", "emaballarin")
+
+# Default recipe (runs when just is called without arguments)
+default:
+    @just --list
+
+# Build the container image
+build:
+    @echo "Building container image..."
+    {{runtime}} build -t {{image_name}}:{{tag}} .
+
+# Run container in interactive mode
+run:
+    @echo "Starting interactive container..."
+    {{runtime}} run --rm -it {{gpu_flags}} {{mount_flags}} \
+        -v {{invocation_directory()}}:/workspace:Z \
+        {{image_name}}:{{tag}}
+
+# Start bash shell in container
+shell:
+    @echo "Starting shell..."
+    {{runtime}} run --rm -it {{gpu_flags}} {{mount_flags}} \
+        -v {{invocation_directory()}}:/workspace:Z \
+        {{image_name}}:{{tag}} \
+        /bin/bash
+
+# Run container with custom mount (interactive)
+mount-run:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "=== Custom Mount Setup ==="
+    echo ""
+    read -p "Enter the host path to mount: " host_path
+    if [ -z "$host_path" ]; then
+        echo "Error: No path provided" >&2
+        exit 1
+    fi
+    if [ ! -d "$host_path" ]; then
+        echo "Warning: Path '$host_path' does not exist or is not a directory"
+        read -p "Continue anyway? (y/N): " confirm
+        if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+            echo "Cancelled."
+            exit 0
+        fi
+    fi
+    echo ""
+    echo "Will mount: $host_path -> /mnt/data"
+    echo "Press Enter to continue, or Ctrl+C to cancel..."
+    read
+    echo "Starting container..."
+    {{runtime}} run --rm -it {{gpu_flags}} \
+        -v "$host_path":/mnt/data:Z \
+        -v {{invocation_directory()}}:/workspace:Z \
+        {{image_name}}:{{tag}}
+
+# Start Jupyter Lab server
+jupyter:
+    @echo "Starting Jupyter Lab on http://localhost:8888"
+    {{runtime}} run --rm -it {{gpu_flags}} {{mount_flags}} \
+        -p 8888:8888 \
+        -v {{invocation_directory()}}:/workspace:Z \
+        {{image_name}}:{{tag}} \
+        jupyter lab --ip=0.0.0.0 --allow-root --no-browser
+
+# Verify CUDA and dependencies
+verify:
+    @echo "Verifying CUDA and PyTorch installation..."
+    @{{runtime}} run --rm {{gpu_flags}} {{image_name}}:{{tag}} \
+        python -c "import torch; import jax; print('PyTorch:', torch.__version__); print('CUDA available:', torch.cuda.is_available()); print('CUDA devices:', torch.cuda.device_count()); print('JAX devices:', jax.devices())"
+
+# Remove containers and images
+clean:
+    @echo "Cleaning up containers and images..."
+    @{{runtime}} ps -aq --filter ancestor={{image_name}}:{{tag}} | xargs -r {{runtime}} rm -f || true
+    @{{runtime}} images -q {{image_name}}:{{tag}} | xargs -r {{runtime}} rmi -f || true
+    @{{runtime}} volume prune -f
+
+# Push image to registry (set REGISTRY variable)
+push:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "{{registry}}" ]; then
+        echo "Error: REGISTRY variable not set. Usage: just push REGISTRY=your-registry.com" >&2
+        exit 1
+    fi
+    echo "Tagging and pushing to {{registry}}/{{registry_username}}/{{image_name}}:{{tag}}"
+    {{runtime}} tag {{image_name}}:{{tag}} {{registry}}/{{registry_username}}/{{image_name}}:{{tag}}
+    {{runtime}} push {{registry}}/{{registry_username}}/{{image_name}}:{{tag}}

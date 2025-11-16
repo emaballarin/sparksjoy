@@ -1,0 +1,205 @@
+# ============================================================================
+# ComfyUI Docker Deployment - Git Ignore
+# ============================================================================
+
+# ============================================================================
+# Environment & Secrets
+# ============================================================================
+.env
+.env.local
+.env.*.local
+
+# ============================================================================
+# Persistent Data Volumes
+# ============================================================================
+volumes/
+!volumes/.gitkeep
+
+# Models (can be very large)
+volumes/models/
+!volumes/models/.gitkeep
+
+# Custom nodes (user-installed)
+volumes/custom_nodes/
+!volumes/custom_nodes/.gitkeep
+
+# Generated outputs
+volumes/output/
+!volumes/output/.gitkeep
+
+# Input images
+volumes/input/
+!volumes/input/.gitkeep
+
+# Temporary files
+volumes/temp/
+!volumes/temp/.gitkeep
+
+# ============================================================================
+# TLS Certificates
+# ============================================================================
+certs/
+!certs/.gitkeep
+
+# Specific certificate files
+*.crt
+*.key
+*.pem
+*.p12
+*.pfx
+
+# ============================================================================
+# Logs
+# ============================================================================
+logs/
+!logs/.gitkeep
+!logs/comfyui/.gitkeep
+!logs/traefik/.gitkeep
+
+# Log files
+*.log
+*.log.*
+
+# ============================================================================
+# Backups
+# ============================================================================
+backups/
+!backups/.gitkeep
+
+# Backup archives
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.tgz
+*.zip
+
+# Encrypted backups
+*.gpg
+*.asc
+
+# Checksums
+*.sha256
+*.md5
+
+# ============================================================================
+# Traefik
+# ============================================================================
+# ACME Let's Encrypt certificates
+config/acme.json
+
+# ============================================================================
+# Docker
+# ============================================================================
+# Docker Compose override (for local customization)
+docker-compose.override.yml
+docker-compose.*.yml
+!docker-compose.yml
+
+# ============================================================================
+# Operating System
+# ============================================================================
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Linux
+*~
+.directory
+.Trash-*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ============================================================================
+# Editors & IDEs
+# ============================================================================
+
+# Visual Studio Code
+.vscode/
+*.code-workspace
+
+# JetBrains IDEs (PyCharm, IntelliJ, etc.)
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Vim
+*.swp
+*.swo
+*~
+.*.sw?
+
+# Emacs
+*~
+\#*\#
+.\#*
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# ============================================================================
+# Python
+# ============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+
+# ============================================================================
+# Miscellaneous
+# ============================================================================
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Archives
+*.7z
+*.dmg
+*.gz
+*.iso
+*.jar
+*.rar
+*.tar
+*.zip
+
+# SSH keys
+*.ssh/
+id_rsa
+id_dsa
+id_ed25519
+
+# GPG keys
+*.gpg
+*.asc
+secring.gpg
+pubring.gpg
+
+# ============================================================================
+# Project-Specific
+# ============================================================================
+
+# Development scripts (if any)
+dev/
+scratch/
+
+# Test files
+test/
+tests/
+*.test
+
+# Documentation build artifacts
+docs/_build/
+site/

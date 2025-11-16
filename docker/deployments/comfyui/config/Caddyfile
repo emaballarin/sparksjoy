@@ -1,0 +1,179 @@
+# ============================================================================
+# Caddy Configuration for ComfyUI
+# ============================================================================
+#
+# This Caddyfile provides HTTPS-only access to ComfyUI with:
+# - TLS 1.3 preferred with TLS 1.2 fallback
+# - Ed25519 curve support (X25519)
+# - Caddy-optimized security headers
+# - Gzip and Zstandard compression
+# - Reverse proxy to ComfyUI application
+# - Structured JSON logging
+#
+# Certificate Handling:
+# - Default: Uses certificates from /certs/ (self-signed or Tailscale-generated)
+# - For Let's Encrypt: Set USE_LETSENCRYPT=true and update docker-compose.yml
+#   to remove the manual tls directive
+#
+# Environment Variables:
+# - DOMAIN: Domain name (default: localhost)
+# - CADDY_HTTPS_PORT: HTTPS port (default: 8444)
+#
+# ============================================================================
+
+# Global configuration
+{
+    # Disable automatic HTTPS to use manual certificate management
+    auto_https off
+
+    # Disable admin API for security
+    admin off
+}
+
+# Main site configuration
+{$DOMAIN:localhost}:{$CADDY_HTTPS_PORT:8444} {
+
+    # ========================================================================
+    # TLS Configuration
+    # ========================================================================
+    # Uses certificates from /certs/ directory (self-signed or Tailscale)
+    # For Let's Encrypt ACME: Replace this block with just "tls {$ACME_EMAIL}"
+
+    tls /certs/server.crt /certs/server.key {
+        # Protocol versions: Prefer TLS 1.3, allow TLS 1.2 for compatibility
+        protocols tls1.2 tls1.3
+
+        # Elliptic curves: Ed25519/X25519 first (fastest & most secure)
+        curves x25519 secp521r1 secp384r1
+
+        # Application-Layer Protocol Negotiation
+        alpn h2 http/1.1
+    }
+
+    # ========================================================================
+    # Security Headers (Caddy Best Practices)
+    # ========================================================================
+
+    header {
+        # HTTP Strict Transport Security (2 years)
+        Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+
+        # Prevent MIME type sniffing
+        X-Content-Type-Options "nosniff"
+
+        # Clickjacking protection
+        X-Frame-Options "DENY"
+
+        # Referrer policy
+        Referrer-Policy "strict-origin-when-cross-origin"
+
+        # Content Security Policy (balanced security for web apps)
+        Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' wss: https:; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+
+        # Permissions Policy (disable unnecessary browser features)
+        Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=(), accelerometer=()"
+
+        # Hide server version information
+        -Server
+    }
+
+    # ========================================================================
+    # Compression
+    # ========================================================================
+    # Gzip and Zstandard compression for text-based responses
+
+    encode gzip zstd {
+        # Only compress responses larger than 1KB
+        minimum_length 1024
+    }
+
+    # ========================================================================
+    # Fix MIME types for CSS files
+    # ========================================================================
+    # Handle CSS files separately to fix MIME type issues
+    @css path *.css
+    handle @css {
+        reverse_proxy comfyui:8188 {
+            header_up X-Real-IP {remote_host}
+
+            # Unconditionally set Content-Type for CSS files
+            # (ComfyUI sends wrong or empty MIME types)
+            header_down Content-Type "text/css; charset=utf-8"
+
+            transport http {
+                dial_timeout 30s
+                response_header_timeout 0s
+                keepalive_idle_conns 200
+                keepalive_idle_conns_per_host 50
+            }
+        }
+    }
+
+    # ========================================================================
+    # Reverse Proxy to ComfyUI
+    # ========================================================================
+
+    reverse_proxy comfyui:8188 {
+        # Forward client information headers
+        header_up X-Real-IP {remote_host}
+
+        # HTTP transport configuration
+        transport http {
+            # Connection timeout
+            dial_timeout 30s
+
+            # Response header timeout (0 = no timeout for WebSocket and streaming)
+            response_header_timeout 0s
+
+            # Keep-alive connection pooling
+            keepalive_idle_conns 200
+            keepalive_idle_conns_per_host 50
+        }
+
+        # Health check (passive)
+        health_uri /
+        health_interval 30s
+        health_timeout 10s
+    }
+
+    # ========================================================================
+    # Access Logging
+    # ========================================================================
+
+    log {
+        output file /var/log/caddy/access.log {
+            roll_size 100mb
+            roll_keep 5
+            roll_keep_for 720h
+        }
+        format json
+        level INFO
+    }
+}
+
+# ============================================================================
+# Notes:
+# ============================================================================
+#
+# Rate Limiting:
+# - Caddy's built-in rate limiting requires the rate_limit plugin
+# - To enable: Install caddy-rate-limit module and add configuration
+# - Alternative: Use external rate limiting (firewall, load balancer)
+#
+# Let's Encrypt (ACME):
+# - To enable automatic certificate management:
+#   1. Set USE_LETSENCRYPT=true in .env
+#   2. Set ACME_EMAIL in .env
+#   3. Replace the tls block above with: tls {$ACME_EMAIL}
+#   4. Change auto_https from 'off' to 'on' in global config
+#
+# Certificate Rotation:
+# - For Tailscale certificates: Handled automatically by Tailscale
+# - For self-signed: Regenerate periodically with generate-certs.sh
+# - For Let's Encrypt: Automatic renewal by Caddy
+#
+# WebSocket Support:
+# - Caddy automatically handles WebSocket upgrade requests
+# - No additional configuration needed for ComfyUI's real-time features
+#
+# ============================================================================

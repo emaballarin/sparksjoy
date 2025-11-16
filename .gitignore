@@ -1,0 +1,83 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+pip-log.txt
+pip-delete-this-directory.txt
+.venv
+venv/
+ENV/
+env/
+*.ipynb_checkpoints
+
+# C/C++
+*.o
+*.out
+*.exe
+*.obj
+*.a
+*.so
+*.dylib
+*.dSYM/
+memquery
+cacheflush
+updateall
+
+# Editors and IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.bak
+.project
+.cproject
+.settings/
+
+# Docker/Containers
+*.tar
+*.tar.gz
+.dockerignore
+
+# Logs and temp files
+*.log
+*.tmp
+*.temp
+.cache/
+
+# System files
+Thumbs.db
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+
+# Pixi (already covered in docker/minilit but just in case)
+.pixi/
+pixi.lock
+
+# Certificates
+*.pem
+*.crt
+*.key
+
+# Claude
+.claude/
+*/.claude/*

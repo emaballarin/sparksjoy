@@ -1,0 +1,533 @@
+# ============================================================================
+# OpenWebUI Production Stack with Caddy Reverse Proxy
+# ============================================================================
+#
+# This docker-compose file provides a production-ready OpenWebUI deployment with:
+# - Caddy reverse proxy for HTTPS-only access
+# - ChromaDB vector database for RAG capabilities
+# - Isolated Docker network for internal service communication
+# - Comprehensive security hardening
+# - Resource limits and health checks
+# - Persistent data volumes
+#
+# USAGE:
+#   1. Copy .env.example to .env and configure variables
+#   2. Run: ./scripts/setup.sh (generates certs, creates volumes)
+#   3. Start: docker compose up -d
+#   4. Access: https://your-domain.com:8443
+#
+# ============================================================================
+
+services:
+    # ==========================================================================
+    # Caddy Reverse Proxy
+    # ==========================================================================
+    # Routes HTTPS-only traffic to OpenWebUI with security headers and compression.
+    # Handles TLS termination with self-signed or Tailscale certificates.
+
+    caddy:
+        image: caddy:${CADDY_VERSION:-2-alpine}
+        container_name: ${PROJECT_NAME:-owui}-caddy
+        restart: unless-stopped
+
+        # Service dependencies
+        depends_on:
+            openwebui:
+                condition: service_healthy
+
+        # Graceful shutdown configuration
+        stop_grace_period: 15s
+        stop_signal: SIGTERM
+
+        # Security options
+        security_opt:
+            - no-new-privileges:true
+
+        # Port mappings (HTTPS-only)
+        ports:
+            - "${CADDY_HTTPS_PORT:-8443}:${CADDY_HTTPS_PORT:-8443}"
+
+        # Environment variables
+        environment:
+            - TZ=${TZ:-UTC}
+            - DOMAIN=${DOMAIN:-localhost}
+            - CADDY_HTTPS_PORT=${CADDY_HTTPS_PORT:-8443}
+            - ACME_EMAIL=${ACME_EMAIL:-}
+
+        # Volume mounts
+        volumes:
+            # Configuration file (read-only)
+            - ./config/Caddyfile:/etc/caddy/Caddyfile:ro
+
+            # TLS certificates (read-only)
+            - ./certs:/certs:ro
+
+            # Logs
+            - ${CADDY_LOGS_PATH:-./logs/caddy}:/var/log/caddy:rw
+
+            # Caddy data (for ACME certificates if Let's Encrypt is used)
+            - ${CADDY_DATA_PATH:-./volumes/caddy-data}:/data:rw
+
+            # Caddy config storage
+            - ${CADDY_CONFIG_PATH:-./volumes/caddy-config}:/config:rw
+
+        # Resource limits
+        deploy:
+            resources:
+                limits:
+                    memory: ${CADDY_MEMORY_LIMIT:-512m}
+                    cpus: "${CADDY_CPU_LIMIT:-0.5}"
+                reservations:
+                    memory: ${CADDY_MEMORY_RESERVATION:-128m}
+
+        # Health check
+        healthcheck:
+            test: ["CMD", "caddy", "version"]
+            interval: ${HEALTHCHECK_INTERVAL:-30s}
+            timeout: ${HEALTHCHECK_TIMEOUT:-10s}
+            retries: ${HEALTHCHECK_RETRIES:-3}
+            start_period: ${HEALTHCHECK_START_PERIOD_CADDY:-10s}
+
+        # Logging configuration
+        logging:
+            driver: ${LOG_DRIVER:-json-file}
+            options:
+                max-size: ${LOG_MAX_SIZE:-100m}
+                max-file: "${LOG_MAX_FILE:-5}"
+                labels: "service=caddy"
+                tag: "{{.Name}}/{{.ID}}"
+
+        # Network
+        networks:
+            - owui-network
+
+        # Docker labels
+        labels:
+            - "com.docker.compose.project=${PROJECT_NAME:-owui}"
+            - "service.name=caddy"
+            - "service.description=Reverse proxy and TLS termination"
+            - "com.centurylinklabs.watchtower.enable=true"
+            - "com.centurylinklabs.watchtower.scope=owui"
+
+    # ==========================================================================
+    # OpenWebUI Application
+    # ==========================================================================
+    # Main web interface for LLM interactions with RAG, code execution,
+    # and multi-provider support (Ollama, OpenAI, Anthropic, etc.)
+
+    openwebui:
+        image: ghcr.io/open-webui/open-webui:${OPENWEBUI_VERSION:-main}
+        container_name: ${PROJECT_NAME:-owui}-openwebui
+        restart: unless-stopped
+
+        # Graceful shutdown configuration (allow active requests to complete)
+        stop_grace_period: 30s
+        stop_signal: SIGTERM
+
+        # Security options
+        security_opt:
+            - no-new-privileges:true
+
+        # Environment variables
+        environment:
+            # === Core Configuration ===
+            - WEBUI_URL=${WEBUI_URL:-https://localhost:8443}
+            - WEBUI_NAME=${WEBUI_NAME:-Open WebUI}
+            - PORT=8080
+            - ENV=prod
+            - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY:?WEBUI_SECRET_KEY must be set}
+            - TZ=${TZ:-UTC}
+
+            # === Data Directories ===
+            - DATA_DIR=/app/backend/data
+            - TIKTOKEN_CACHE_DIR=/app/backend/data/cache/tiktoken
+
+            # === Authentication & Security ===
+            - WEBUI_AUTH=${WEBUI_AUTH:-true}
+            - ENABLE_SIGNUP=${ENABLE_SIGNUP:-false}
+            - ENABLE_LOGIN_FORM=${ENABLE_LOGIN_FORM:-true}
+            - DEFAULT_USER_ROLE=${DEFAULT_USER_ROLE:-user}
+            - JWT_EXPIRES_IN=${JWT_EXPIRES_IN:-7d}
+            - WEBUI_SESSION_COOKIE_SAME_SITE=${WEBUI_SESSION_COOKIE_SAME_SITE:-lax}
+            - WEBUI_SESSION_COOKIE_SECURE=${WEBUI_SESSION_COOKIE_SECURE:-true}
+            - WEBUI_AUTH_COOKIE_SAME_SITE=${WEBUI_AUTH_COOKIE_SAME_SITE:-lax}
+            - WEBUI_AUTH_COOKIE_SECURE=${WEBUI_AUTH_COOKIE_SECURE:-true}
+
+            # === CORS Configuration ===
+            - CORS_ALLOW_ORIGIN=${CORS_ALLOW_ORIGIN:-https://localhost:8443}
+
+            # === API Configuration ===
+            - ENABLE_API_KEY=${ENABLE_API_KEY:-true}
+            - ENABLE_API_KEY_ENDPOINT_RESTRICTIONS=${ENABLE_API_KEY_ENDPOINT_RESTRICTIONS:-false}
+
+            # === Ollama Integration ===
+            - ENABLE_OLLAMA_API=${ENABLE_OLLAMA_API:-true}
+            - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+
+            # === OpenAI Integration ===
+            - ENABLE_OPENAI_API=${ENABLE_OPENAI_API:-true}
+            - OPENAI_API_BASE_URL=${OPENAI_API_BASE_URL:-https://api.openai.com/v1}
+            - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+
+            # === Vector Database (ChromaDB) ===
+            - VECTOR_DB=chroma
+            - CHROMA_DATA_PATH=/app/backend/chroma
+
+            # === RAG Configuration ===
+            - RAG_EMBEDDING_ENGINE=${RAG_EMBEDDING_ENGINE:-}
+            - RAG_EMBEDDING_MODEL=${RAG_EMBEDDING_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+            - RAG_EMBEDDING_MODEL_AUTO_UPDATE=${RAG_EMBEDDING_MODEL_AUTO_UPDATE:-true}
+            - RAG_EMBEDDING_MODEL_TRUST_REMOTE_CODE=${RAG_EMBEDDING_MODEL_TRUST_REMOTE_CODE:-false}
+            - RAG_TOP_K=${RAG_TOP_K:-5}
+            - RAG_RELEVANCE_THRESHOLD=${RAG_RELEVANCE_THRESHOLD:-0.0}
+            - CHUNK_SIZE=${CHUNK_SIZE:-1000}
+            - CHUNK_OVERLAP=${CHUNK_OVERLAP:-100}
+            - RAG_TEXT_SPLITTER=${RAG_TEXT_SPLITTER:-character}
+            - RAG_EMBEDDING_BATCH_SIZE=${RAG_EMBEDDING_BATCH_SIZE:-1}
+            - ENABLE_RETRIEVAL_QUERY_GENERATION=${ENABLE_RETRIEVAL_QUERY_GENERATION:-true}
+            - ENABLE_RAG_HYBRID_SEARCH=${ENABLE_RAG_HYBRID_SEARCH:-false}
+            - PDF_EXTRACT_IMAGES=${PDF_EXTRACT_IMAGES:-false}
+            - RAG_FILE_MAX_SIZE=${RAG_FILE_MAX_SIZE:-10}
+            - RAG_FILE_MAX_COUNT=${RAG_FILE_MAX_COUNT:-10}
+
+            # === Reranking ===
+            - RAG_RERANKING_MODEL=${RAG_RERANKING_MODEL:-}
+            - RAG_RERANKING_MODEL_AUTO_UPDATE=${RAG_RERANKING_MODEL_AUTO_UPDATE:-true}
+            - RAG_RERANKING_MODEL_TRUST_REMOTE_CODE=${RAG_RERANKING_MODEL_TRUST_REMOTE_CODE:-false}
+            - RAG_TOP_K_RERANKER=${RAG_TOP_K_RERANKER:-3}
+
+            # === Code Execution ===
+            - ENABLE_CODE_EXECUTION=${ENABLE_CODE_EXECUTION:-true}
+            - CODE_EXECUTION_ENGINE=${CODE_EXECUTION_ENGINE:-pyodide}
+            - ENABLE_CODE_INTERPRETER=${ENABLE_CODE_INTERPRETER:-true}
+            - CODE_INTERPRETER_ENGINE=${CODE_INTERPRETER_ENGINE:-pyodide}
+
+            # === Content Extraction ===
+            - CONTENT_EXTRACTION_ENGINE=${CONTENT_EXTRACTION_ENGINE:-}
+
+            # === Advanced Features ===
+            - ENABLE_TITLE_GENERATION=${ENABLE_TITLE_GENERATION:-true}
+            - ENABLE_FOLLOW_UP_GENERATION=${ENABLE_FOLLOW_UP_GENERATION:-true}
+            - ENABLE_TAGS_GENERATION=${ENABLE_TAGS_GENERATION:-true}
+            - ENABLE_AUTOCOMPLETE_GENERATION=${ENABLE_AUTOCOMPLETE_GENERATION:-true}
+            - ENABLE_EVALUATION_ARENA_MODELS=${ENABLE_EVALUATION_ARENA_MODELS:-true}
+            - ENABLE_MESSAGE_RATING=${ENABLE_MESSAGE_RATING:-true}
+            - ENABLE_COMMUNITY_SHARING=${ENABLE_COMMUNITY_SHARING:-true}
+            - ENABLE_USER_WEBHOOKS=${ENABLE_USER_WEBHOOKS:-true}
+            - ENABLE_DIRECT_CONNECTIONS=${ENABLE_DIRECT_CONNECTIONS:-true}
+
+            # === Admin & Access Control ===
+            - ENABLE_ADMIN_EXPORT=${ENABLE_ADMIN_EXPORT:-true}
+            - ENABLE_ADMIN_CHAT_ACCESS=${ENABLE_ADMIN_CHAT_ACCESS:-true}
+            - BYPASS_ADMIN_ACCESS_CONTROL=${BYPASS_ADMIN_ACCESS_CONTROL:-true}
+            - BYPASS_MODEL_ACCESS_CONTROL=${BYPASS_MODEL_ACCESS_CONTROL:-false}
+            - SHOW_ADMIN_DETAILS=${SHOW_ADMIN_DETAILS:-true}
+            - ADMIN_EMAIL=${ADMIN_EMAIL:-}
+
+            # === Localization ===
+            - DEFAULT_LOCALE=${DEFAULT_LOCALE:-en}
+
+            # === Performance ===
+            - THREAD_POOL_SIZE=${THREAD_POOL_SIZE:-40}
+            - ENABLE_REALTIME_CHAT_SAVE=${ENABLE_REALTIME_CHAT_SAVE:-false}
+            - AIOHTTP_CLIENT_TIMEOUT=${AIOHTTP_CLIENT_TIMEOUT:-300}
+            - AIOHTTP_CLIENT_TIMEOUT_MODEL_LIST=${AIOHTTP_CLIENT_TIMEOUT_MODEL_LIST:-10}
+            - MODELS_CACHE_TTL=${MODELS_CACHE_TTL:-60}
+
+            # === Security ===
+            - ENABLE_WEB_LOADER_SSL_VERIFICATION=${ENABLE_WEB_LOADER_SSL_VERIFICATION:-true}
+            - ENABLE_FORWARD_USER_INFO_HEADERS=${ENABLE_FORWARD_USER_INFO_HEADERS:-false}
+
+            # === System ===
+            - ENABLE_VERSION_UPDATE_CHECK=${ENABLE_VERSION_UPDATE_CHECK:-true}
+            - SAFE_MODE=${SAFE_MODE:-false}
+            - OFFLINE_MODE=${OFFLINE_MODE:-false}
+
+        # Volume mounts
+        volumes:
+            # Persistent application data
+            - ${OPENWEBUI_DATA_PATH:-./volumes/data}:/app/backend/data:rw
+
+            # Cache directory
+            - ${OPENWEBUI_CACHE_PATH:-./volumes/cache}:/app/backend/data/cache:rw
+
+            # ChromaDB vector database (isolated)
+            - ${OPENWEBUI_CHROMA_PATH:-./volumes/chroma}:/app/backend/chroma:rw
+
+            # Logs
+            - ${OPENWEBUI_LOGS_PATH:-./logs/openwebui}:/app/backend/logs:rw
+
+        # Resource limits
+        deploy:
+            resources:
+                limits:
+                    memory: ${OPENWEBUI_MEMORY_LIMIT:-4g}
+                    cpus: "${OPENWEBUI_CPU_LIMIT:-2}"
+                reservations:
+                    memory: ${OPENWEBUI_MEMORY_RESERVATION:-1g}
+                    devices:
+                        - driver: nvidia
+                          device_ids: ["${GPU_DEVICE_IDS:-0}"]
+                          capabilities: [gpu]
+
+        # Health check
+        healthcheck:
+            test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+            interval: ${HEALTHCHECK_INTERVAL:-30s}
+            timeout: ${HEALTHCHECK_TIMEOUT:-10s}
+            retries: ${HEALTHCHECK_RETRIES:-3}
+            start_period: ${HEALTHCHECK_START_PERIOD_OPENWEBUI:-60s}
+
+        # Logging configuration
+        logging:
+            driver: ${LOG_DRIVER:-json-file}
+            options:
+                max-size: ${LOG_MAX_SIZE:-100m}
+                max-file: "${LOG_MAX_FILE:-5}"
+                labels: "service=openwebui"
+                tag: "{{.Name}}/{{.ID}}"
+
+        # Network
+        networks:
+            - owui-network
+
+        # Docker labels
+        labels:
+            - "com.docker.compose.project=${PROJECT_NAME:-owui}"
+            - "service.name=openwebui"
+            - "service.description=OpenWebUI application"
+
+            # Watchtower auto-update
+            - "com.centurylinklabs.watchtower.enable=true"
+            - "com.centurylinklabs.watchtower.scope=owui"
+
+    # ==========================================================================
+    # Watchtower - Automatic Container Updates
+    # ==========================================================================
+    # Monitors and automatically updates OpenWebUI, Caddy, and itself.
+    # Runs daily at 4 AM UTC with automatic rollback on failure.
+
+    watchtower:
+        image: containrrr/watchtower:${WATCHTOWER_VERSION:-latest}
+        container_name: ${PROJECT_NAME:-owui}-watchtower
+        restart: unless-stopped
+
+        # Graceful shutdown configuration
+        stop_grace_period: 10s
+        stop_signal: SIGTERM
+
+        # Security options
+        security_opt:
+            - no-new-privileges:true
+
+        # Environment variables
+        environment:
+            # Update schedule (cron format: sec min hour day month weekday)
+            - WATCHTOWER_SCHEDULE=${WATCHTOWER_SCHEDULE:-0 0 4 * * *}
+
+            # Poll interval (seconds) - fallback if schedule not used
+            - WATCHTOWER_POLL_INTERVAL=${WATCHTOWER_POLL_INTERVAL:-86400}
+
+            # Cleanup old images after update (keep 1 for rollback)
+            - WATCHTOWER_CLEANUP=true
+            - WATCHTOWER_REMOVE_VOLUMES=false
+
+            # Rolling restart (update one at a time)
+            - WATCHTOWER_ROLLING_RESTART=true
+
+            # Timeout for stopping containers
+            - WATCHTOWER_TIMEOUT=${WATCHTOWER_TIMEOUT:-300s}
+
+            # Only update containers with watchtower.enable=true label
+            - WATCHTOWER_LABEL_ENABLE=true
+
+            # Scope to only manage containers from this deployment
+            - WATCHTOWER_SCOPE=owui
+
+            # Include restarting containers
+            - WATCHTOWER_INCLUDE_RESTARTING=true
+
+            # Don't update stopped containers
+            - WATCHTOWER_INCLUDE_STOPPED=false
+
+            # Timezone
+            - TZ=${TZ:-UTC}
+
+            # Log level (trace, debug, info, warn, error, fatal, panic)
+            - WATCHTOWER_LOG_LEVEL=${WATCHTOWER_LOG_LEVEL:-info}
+
+            # Notification settings (optional)
+            # - WATCHTOWER_NOTIFICATIONS=email
+            # - WATCHTOWER_NOTIFICATION_EMAIL_FROM=watchtower@example.com
+            # - WATCHTOWER_NOTIFICATION_EMAIL_TO=admin@example.com
+
+        # Volume mounts
+        volumes:
+            # Docker socket for container management (read-only for security)
+            - /run/user/1000/docker.sock:/var/run/docker.sock:ro
+
+        # Resource limits
+        deploy:
+            resources:
+                limits:
+                    memory: ${WATCHTOWER_MEMORY_LIMIT:-256m}
+                    cpus: "${WATCHTOWER_CPU_LIMIT:-0.25}"
+                reservations:
+                    memory: ${WATCHTOWER_MEMORY_RESERVATION:-64m}
+
+        # Logging configuration
+        logging:
+            driver: ${LOG_DRIVER:-json-file}
+            options:
+                max-size: ${LOG_MAX_SIZE:-100m}
+                max-file: "${LOG_MAX_FILE:-5}"
+                labels: "service=watchtower"
+                tag: "{{.Name}}/{{.ID}}"
+
+        # Network
+        networks:
+            - owui-network
+
+        # Docker labels
+        labels:
+            - "com.docker.compose.project=${PROJECT_NAME:-owui}"
+            - "service.name=watchtower"
+            - "service.description=Automatic container updater"
+            # Enable Watchtower to update itself
+            - "com.centurylinklabs.watchtower.enable=true"
+            - "com.centurylinklabs.watchtower.scope=owui"
+
+    # ==========================================================================
+    # vLLM Inference Server
+    # ==========================================================================
+    # OpenAI-compatible inference server for local LLM hosting.
+    # Provides GPU-accelerated inference with vLLM engine.
+    # OpenWebUI can connect via: http://vllm:8000/v1
+
+    vllm:
+        image: nvcr.io/nvidia/vllm:${VLLM_VERSION:-25.10-py3}
+        container_name: ${PROJECT_NAME:-owui}-vllm
+        platform: ${PLATFORM:-linux/arm64}
+        restart: ${RESTART_POLICY:-unless-stopped}
+
+        # Graceful shutdown configuration
+        stop_grace_period: 30s
+        stop_signal: SIGTERM
+
+        # Security options
+        security_opt:
+            - no-new-privileges:true
+
+        # Environment variables
+        environment:
+            # NVIDIA GPU Configuration
+            - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-all}
+            - NVIDIA_DRIVER_CAPABILITIES=${NVIDIA_DRIVER_CAPABILITIES:-compute,utility}
+
+            # HuggingFace Configuration
+            - HF_HOME=${HF_HOME:-/app/cache}
+            - HF_TOKEN=${HF_TOKEN:-}
+            - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
+
+            # vLLM Server Configuration
+            - VLLM_HOST=${VLLM_HOST:-0.0.0.0}
+            - VLLM_PORT=${VLLM_PORT:-8000}
+            - VLLM_LOG_LEVEL=${VLLM_LOG_LEVEL:-info}
+
+        # vLLM serve command with all configuration flags
+        command: >
+            vllm
+            serve
+            ${VLLM_MODEL:-""}
+            --host ${VLLM_HOST:-0.0.0.0}
+            --port ${VLLM_PORT:-8000}
+            --tensor-parallel-size ${VLLM_TENSOR_PARALLEL_SIZE:-1}
+            --max-model-len ${VLLM_MAX_MODEL_LEN:-8192}
+            --max-num-seqs ${VLLM_MAX_NUM_SEQS:-256}
+            --gpu-memory-utilization ${VLLM_GPU_MEMORY_UTILIZATION:-0.3}
+            ${VLLM_QUANTIZATION:+--quantization ${VLLM_QUANTIZATION}}
+            ${VLLM_KV_CACHE_DTYPE:+--kv-cache-dtype ${VLLM_KV_CACHE_DTYPE}}
+            ${VLLM_TRUST_REMOTE_CODE:+--trust-remote-code}
+            ${VLLM_ENABLE_METRICS:+--disable-log-requests}
+            --served-model-name ${VLLM_MODEL:-""}
+
+        # Volume mounts
+        volumes:
+            # Model storage (supports both pre-downloaded and on-demand)
+            - ${MODELS_VOLUME_PATH:-./volumes/models}:/app/models:rw
+            # HuggingFace cache (separate from OpenWebUI cache)
+            - ${VLLM_CACHE_PATH:-./volumes/vllm-cache}:/app/cache:rw
+            # Logs
+            - ${VLLM_LOGS_PATH:-./logs/vllm}:/app/logs:rw
+
+        # Resource limits
+        deploy:
+            resources:
+                limits:
+                    memory: ${VLLM_MEMORY_LIMIT:-96g}
+                    cpus: "${VLLM_CPU_LIMIT:-10}"
+                reservations:
+                    #memory: ${VLLM_MEMORY_RESERVATION:-32g}
+                    devices:
+                        - driver: nvidia
+                          device_ids: ["${VLLM_GPU_DEVICE:-0}"]
+                          capabilities: [gpu]
+
+        # Health check
+        healthcheck:
+            test: ["CMD", "curl", "-f", "http://localhost:${VLLM_PORT:-8000}/health"]
+            interval: ${HEALTHCHECK_INTERVAL:-30s}
+            timeout: ${HEALTHCHECK_TIMEOUT:-10s}
+            retries: ${HEALTHCHECK_RETRIES:-3}
+            start_period: ${HEALTHCHECK_START_PERIOD_VLLM:-120s}
+
+        # Logging configuration
+        logging:
+            driver: ${LOG_DRIVER:-json-file}
+            options:
+                max-size: ${LOG_MAX_SIZE:-100m}
+                max-file: "${LOG_MAX_FILE:-5}"
+                labels: "service=vllm"
+                tag: "{{.Name}}/{{.ID}}"
+
+        # Network
+        networks:
+            - owui-network
+
+        # Docker labels
+        labels:
+            - "com.docker.compose.project=${PROJECT_NAME:-owui}"
+            - "service.name=vllm"
+            - "service.description=vLLM inference server"
+            - "com.vllm.service=inference-server"
+            - "com.vllm.version=latest"
+            # Watchtower auto-update
+            - "com.centurylinklabs.watchtower.enable=true"
+            - "com.centurylinklabs.watchtower.scope=owui"
+
+# ============================================================================
+# Networks
+# ============================================================================
+
+networks:
+    owui-network:
+        name: ${NETWORK_NAME:-owui-network}
+        driver: bridge
+        ipam:
+            config:
+                # Reserved subnet for future service expansion
+                - subnet: ${NETWORK_SUBNET:-172.29.0.0/16}
+        labels:
+            - "com.docker.compose.project=${PROJECT_NAME:-owui}"
+            - "network.description=Isolated network for OpenWebUI services"
+# ============================================================================
+# Volumes
+# ============================================================================
+# Note: Using bind mounts for easier backup/restore and direct file access.
+# Named volumes can be used by uncommenting below and updating service mounts.
+#
+# volumes:
+#   openwebui-data:
+#     name: ${PROJECT_NAME:-owui}-data
+#   openwebui-cache:
+#     name: ${PROJECT_NAME:-owui}-cache

@@ -1,0 +1,38 @@
+# Environment configuration (contains secrets)
+.env
+
+# TLS certificates (sensitive)
+certs/*.crt
+certs/*.key
+certs/*.pem
+
+# Persistent data volumes
+volumes/
+backups/
+logs/
+
+# Traefik ACME storage (Let's Encrypt)
+config/acme.json
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE/Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.log
+
+# Claude code
+.claude

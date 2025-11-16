@@ -1,0 +1,69 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Pixi
+.pixi/
+pixi.lock
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.vim/
+
+# Git
+.git/
+
+# Data and outputs
+data/
+logs/
+outputs/
+*.log
+checkpoints/
+wandb/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# OS
+.DS_Store
+Thumbs.db
+.directory
+
+# Docker/Podman
+*.tar
+*.tar.gz
+docker-compose.override.yml
+
+# Environment variables
+.env
+.env.local
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
+*.swp
+
+# CUDA/GPU artifacts
+*.cubin
+*.fatbin
+*.ptx

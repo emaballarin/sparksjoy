@@ -1,0 +1,216 @@
+# ComfyUI Production Deployment with Caddy & Watchtower
+# Optimized for DGX Spark (aarch64/arm64) with NVIDIA GPU support
+# HTTPS-only access via Caddy reverse proxy
+
+services:
+    # ============================================================================
+    # Caddy Reverse Proxy
+    # ============================================================================
+    caddy:
+        image: caddy:${CADDY_VERSION:-2-alpine}
+        container_name: ${PROJECT_NAME:-comfyui}-caddy
+        restart: unless-stopped
+
+        # Service dependencies
+        depends_on:
+            comfyui:
+                condition: service_healthy
+
+        # Graceful shutdown configuration
+        stop_grace_period: 15s
+        stop_signal: SIGTERM
+
+        # Security options
+        security_opt:
+            - no-new-privileges:true
+
+        # Port mappings (HTTPS-only)
+        ports:
+            - "${CADDY_HTTPS_PORT:-8444}:${CADDY_HTTPS_PORT:-8444}" # HTTPS only (different from owui's 8443)
+
+        # Environment variables
+        environment:
+            - TZ=${TZ:-UTC}
+            - DOMAIN=${DOMAIN:-localhost}
+            - CADDY_HTTPS_PORT=${CADDY_HTTPS_PORT:-8444}
+            - ACME_EMAIL=${ACME_EMAIL:-}
+
+        # Volume mounts
+        volumes:
+            # Configuration file (read-only)
+            - ./config/Caddyfile:/etc/caddy/Caddyfile:ro
+
+            # TLS certificates (read-only)
+            - ./certs:/certs:ro
+
+            # Logs
+            - ${CADDY_LOGS_PATH:-./logs/caddy}:/var/log/caddy:rw
+
+            # Caddy data (for ACME certificates if Let's Encrypt is used)
+            - ${CADDY_DATA_PATH:-./volumes/caddy-data}:/data:rw
+
+            # Caddy config storage
+            - ${CADDY_CONFIG_PATH:-./volumes/caddy-config}:/config:rw
+
+        # Resource limits
+        deploy:
+            resources:
+                limits:
+                    memory: ${CADDY_MEMORY_LIMIT:-512m}
+                    cpus: "${CADDY_CPU_LIMIT:-0.5}"
+                reservations:
+                    memory: ${CADDY_MEMORY_RESERVATION:-128m}
+
+        # Health check
+        healthcheck:
+            test: ["CMD", "caddy", "version"]
+            interval: ${HEALTHCHECK_INTERVAL:-30s}
+            timeout: ${HEALTHCHECK_TIMEOUT:-10s}
+            retries: ${HEALTHCHECK_RETRIES:-3}
+            start_period: ${HEALTHCHECK_START_PERIOD_CADDY:-10s}
+
+        # Logging configuration
+        logging:
+            driver: ${LOG_DRIVER:-json-file}
+            options:
+                max-size: ${LOG_MAX_SIZE:-100m}
+                max-file: "${LOG_MAX_FILE:-5}"
+                labels: "service=caddy"
+                tag: "{{.Name}}/{{.ID}}"
+
+        # Network
+        networks:
+            - comfyui-network
+
+        # Docker labels
+        labels:
+            - "com.docker.compose.project=${PROJECT_NAME:-comfyui}"
+            - "service.name=caddy"
+            - "service.description=Reverse proxy and TLS termination"
+            - "com.centurylinklabs.watchtower.enable=true"
+            - "com.centurylinklabs.watchtower.scope=comfyui"
+
+    # ============================================================================
+    # ComfyUI Application
+    # ============================================================================
+    comfyui:
+        image: ${COMFYUI_IMAGE:-comfyui:latest-arm64}
+        container_name: ${PROJECT_NAME:-comfyui}-app
+        restart: unless-stopped
+        command: ["python", "main.py", "--listen", "0.0.0.0", "--port", "8188", "--multi-user"]
+        security_opt:
+            - no-new-privileges:true
+        networks:
+            - comfyui-network
+        volumes:
+            # Model storage (checkpoints, LoRAs, VAEs, ControlNet, IPAdapter, etc.)
+            - ./volumes/models:/app/ComfyUI/models:rw
+            # Custom nodes (persistence for ComfyUI Manager installations)
+            - ./volumes/custom_nodes:/app/ComfyUI/custom_nodes:rw
+            # Generated outputs
+            - ./volumes/output:/app/ComfyUI/output:rw
+            # Input images
+            - ./volumes/input:/app/ComfyUI/input:rw
+            # Temporary files
+            - ./volumes/temp:/app/ComfyUI/temp:rw
+            # Logs
+            - ./logs/comfyui:/app/logs:rw
+        environment:
+            # Timezone
+            - TZ=${TZ:-UTC}
+            # NVIDIA/CUDA
+            - NVIDIA_VISIBLE_DEVICES=${GPU_DEVICE_IDS:-0}
+            - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+            # ComfyUI settings
+            - COMFYUI_PATH=/app/ComfyUI
+            - PYTHONPATH=/app/ComfyUI
+        healthcheck:
+            test: ["CMD", "curl", "-f", "http://localhost:8188/"]
+            interval: 30s
+            timeout: 10s
+            retries: 3
+            start_period: 120s # ComfyUI takes longer to initialize
+        deploy:
+            resources:
+                limits:
+                    cpus: "${COMFYUI_CPU_LIMIT:-8}"
+                    memory: ${COMFYUI_MEMORY_LIMIT:-16G}
+                reservations:
+                    cpus: "${COMFYUI_CPU_RESERVATION:-2}"
+                    memory: ${COMFYUI_MEMORY_RESERVATION:-4G}
+                    devices:
+                        - driver: nvidia
+                          device_ids: ["${GPU_DEVICE_IDS:-0}"]
+                          capabilities: [gpu]
+        labels:
+            - "com.docker.compose.project=${PROJECT_NAME:-comfyui}"
+            - "service.name=comfyui"
+            - "service.description=ComfyUI application"
+
+            # Watchtower auto-update
+            - "com.centurylinklabs.watchtower.enable=true"
+            - "com.centurylinklabs.watchtower.scope=comfyui"
+
+    # ============================================================================
+    # Watchtower (Automatic Updates)
+    # ============================================================================
+    watchtower:
+        image: containrrr/watchtower:latest
+        container_name: ${PROJECT_NAME:-comfyui}-watchtower
+        restart: unless-stopped
+        security_opt:
+            - no-new-privileges:true
+        volumes:
+            # Docker socket for container management (rootless docker)
+            - /run/user/1000/docker.sock:/var/run/docker.sock:ro
+        environment:
+            # Update schedule (daily at 4 AM UTC by default)
+            - WATCHTOWER_SCHEDULE=${WATCHTOWER_SCHEDULE:-0 0 4 * * *}
+            # Only update containers with watchtower.enable=true label
+            - WATCHTOWER_LABEL_ENABLE=true
+            # Scope to only manage containers from this deployment
+            - WATCHTOWER_SCOPE=comfyui
+            # Clean up old images (keep 1 for rollback)
+            - WATCHTOWER_CLEANUP=true
+            - WATCHTOWER_INCLUDE_RESTARTING=true
+            # Rolling restart (update one container at a time)
+            - WATCHTOWER_ROLLING_RESTART=true
+            # Timeout for stopping containers
+            - WATCHTOWER_TIMEOUT=${WATCHTOWER_TIMEOUT:-300s}
+            # Notification settings (optional)
+            - WATCHTOWER_NOTIFICATIONS=${WATCHTOWER_NOTIFICATIONS:-}
+            - WATCHTOWER_NOTIFICATION_URL=${WATCHTOWER_NOTIFICATION_URL:-}
+            # Timezone
+            - TZ=${TZ:-UTC}
+        healthcheck:
+            test: ["CMD", "sh", "-c", "pgrep watchtower || exit 1"]
+            interval: 60s
+            timeout: 10s
+            retries: 3
+        deploy:
+            resources:
+                limits:
+                    cpus: "0.25"
+                    memory: 256M
+                reservations:
+                    memory: 64M
+        labels:
+            - "com.docker.compose.project=${PROJECT_NAME:-comfyui}"
+            - "service.name=watchtower"
+            - "service.description=Automatic container updater"
+            # Enable Watchtower to update itself
+            - "com.centurylinklabs.watchtower.enable=true"
+            - "com.centurylinklabs.watchtower.scope=comfyui"
+
+# ============================================================================
+# Networks
+# ============================================================================
+networks:
+    comfyui-network:
+        name: ${NETWORK_NAME:-comfyui-network}
+        driver: bridge
+        ipam:
+            config:
+                - subnet: ${NETWORK_SUBNET:-172.30.0.0/16}
+        labels:
+            - "com.docker.compose.project=${PROJECT_NAME:-comfyui}"
