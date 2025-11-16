@@ -37,6 +37,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Set working directory
 WORKDIR /app
 
+# Initialize build log for tracking optional component installations
+RUN echo "=== ComfyUI Build Log ===" > /build.log && \
+    echo "Build started: $(date)" >> /build.log && \
+    echo "" >> /build.log
+
 # Clone ComfyUI from official repository
 RUN git clone https://github.com/comfyanonymous/ComfyUI.git /app/ComfyUI
 
@@ -48,27 +53,43 @@ RUN git clone https://github.com/ltdrdata/ComfyUI-Manager.git
 # Using || true to prevent build failures from optional nodes
 
 # ComfyUI-ControlNet-Preprocessors
-RUN git clone https://github.com/Fannovel16/comfyui_controlnet_aux.git || true
+RUN echo "=== Cloning comfyui_controlnet_aux ===" >> /build.log && \
+    git clone https://github.com/Fannovel16/comfyui_controlnet_aux.git >> /build.log 2>&1 || \
+    (echo "FAILED: comfyui_controlnet_aux" >> /build.log && true)
 
 # ComfyUI-IPAdapter-plus
-RUN git clone https://github.com/cubiq/ComfyUI_IPAdapter_plus.git || true
+RUN echo "=== Cloning ComfyUI_IPAdapter_plus ===" >> /build.log && \
+    git clone https://github.com/cubiq/ComfyUI_IPAdapter_plus.git >> /build.log 2>&1 || \
+    (echo "FAILED: ComfyUI_IPAdapter_plus" >> /build.log && true)
 
 # ComfyUI-Impact-Pack (image processing utilities)
-RUN git clone https://github.com/ltdrdata/ComfyUI-Impact-Pack.git || true
+RUN echo "=== Cloning ComfyUI-Impact-Pack ===" >> /build.log && \
+    git clone https://github.com/ltdrdata/ComfyUI-Impact-Pack.git >> /build.log 2>&1 || \
+    (echo "FAILED: ComfyUI-Impact-Pack" >> /build.log && true)
 
 # ComfyUI-Inspire-Pack (additional utility nodes)
-RUN git clone https://github.com/ltdrdata/ComfyUI-Inspire-Pack.git || true
+RUN echo "=== Cloning ComfyUI-Inspire-Pack ===" >> /build.log && \
+    git clone https://github.com/ltdrdata/ComfyUI-Inspire-Pack.git >> /build.log 2>&1 || \
+    (echo "FAILED: ComfyUI-Inspire-Pack" >> /build.log && true)
 
 # WAS Node Suite (extensive node collection)
-RUN git clone https://github.com/WASasquatch/was-node-suite-comfyui.git || true
+RUN echo "=== Cloning was-node-suite-comfyui ===" >> /build.log && \
+    git clone https://github.com/WASasquatch/was-node-suite-comfyui.git >> /build.log 2>&1 || \
+    (echo "FAILED: was-node-suite-comfyui" >> /build.log && true)
 
 # Civitai ComfyUI nodes (model loader from Civitai using AIR identifiers)
-RUN git clone https://github.com/civitai/civitai_comfy_nodes.git || true
+RUN echo "=== Cloning civitai_comfy_nodes ===" >> /build.log && \
+    git clone https://github.com/civitai/civitai_comfy_nodes.git >> /build.log 2>&1 || \
+    (echo "FAILED: civitai_comfy_nodes" >> /build.log && true)
 
 # Merge all requirements.txt files for build dependencies
 # This ensures pip resolves all dependencies together, avoiding version conflicts
 WORKDIR /app/ComfyUI
-RUN find . -name "requirements.txt" -type f -exec cat {} \; | sort -u > /combined-build-requirements.txt && \
+RUN find . -name "requirements.txt" -type f -exec cat {} \; | \
+    grep -vE 'facebookresearch/sam2(torch|matplotlib)' | \
+    sort -u | \
+    sed -E 's/^jax([^a-zA-Z0-9_-].*|$)/jax[cuda13]/' \
+    > /combined-build-requirements.txt && \
     echo "=== Combined build requirements ===" && \
     cat /combined-build-requirements.txt
 
@@ -79,56 +100,83 @@ RUN pip install --constraint /etc/pip/constraint.txt --no-cache-dir -r /combined
 # ============================================================================
 # Cleanup: Remove unnecessary files to reduce image size
 # ============================================================================
-RUN cd /app/ComfyUI && \
+RUN echo "" >> /build.log && \
+    echo "=== Cleanup Phase ===" >> /build.log && \
+    cd /app/ComfyUI && \
     # Remove all .git directories (version control history not needed at runtime)
-    find . -type d -name ".git" -exec rm -rf {} + 2>/dev/null || true && \
+    (find . -type d -name ".git" -exec rm -rf {} + 2>&1 | tee -a /build.log || true) && \
     # Remove pytest cache
-    find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true && \
+    (find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>&1 | tee -a /build.log || true) && \
     # Remove test directories (not needed at runtime)
-    find ./custom_nodes -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true && \
-    find ./custom_nodes -type d -name "test" -exec rm -rf {} + 2>/dev/null || true && \
+    (find ./custom_nodes -type d -name "tests" -exec rm -rf {} + 2>&1 | tee -a /build.log || true) && \
+    (find ./custom_nodes -type d -name "test" -exec rm -rf {} + 2>&1 | tee -a /build.log || true) && \
     # Remove example directories (can be large)
-    find ./custom_nodes -type d -name "examples" -exec rm -rf {} + 2>/dev/null || true && \
-    find ./custom_nodes -type d -name "example" -exec rm -rf {} + 2>/dev/null || true && \
+    (find ./custom_nodes -type d -name "examples" -exec rm -rf {} + 2>&1 | tee -a /build.log || true) && \
+    (find ./custom_nodes -type d -name "example" -exec rm -rf {} + 2>&1 | tee -a /build.log || true) && \
     # Remove documentation source files (keep built docs if any)
-    find ./custom_nodes -type d -name "docs" -exec rm -rf {} + 2>/dev/null || true && \
+    (find ./custom_nodes -type d -name "docs" -exec rm -rf {} + 2>&1 | tee -a /build.log || true) && \
     # Remove CI/CD configuration files
-    find . -name ".github" -type d -exec rm -rf {} + 2>/dev/null || true && \
-    find . -name ".gitlab-ci.yml" -delete 2>/dev/null || true && \
-    find . -name ".travis.yml" -delete 2>/dev/null || true && \
+    (find . -name ".github" -type d -exec rm -rf {} + 2>&1 | tee -a /build.log || true) && \
+    (find . -name ".gitlab-ci.yml" -delete 2>&1 | tee -a /build.log || true) && \
+    (find . -name ".travis.yml" -delete 2>&1 | tee -a /build.log || true) && \
     # Remove editor configurations
-    find . -name ".vscode" -type d -exec rm -rf {} + 2>/dev/null || true && \
-    find . -name ".idea" -type d -exec rm -rf {} + 2>/dev/null || true && \
+    (find . -name ".vscode" -type d -exec rm -rf {} + 2>&1 | tee -a /build.log || true) && \
+    (find . -name ".idea" -type d -exec rm -rf {} + 2>&1 | tee -a /build.log || true) && \
     # Remove linting configurations
-    find . -name ".pylintrc" -delete 2>/dev/null || true && \
-    find . -name ".flake8" -delete 2>/dev/null || true && \
-    find . -name ".mypy_cache" -type d -exec rm -rf {} + 2>/dev/null || true && \
+    (find . -name ".pylintrc" -delete 2>&1 | tee -a /build.log || true) && \
+    (find . -name ".flake8" -delete 2>&1 | tee -a /build.log || true) && \
+    (find . -name ".mypy_cache" -type d -exec rm -rf {} + 2>&1 | tee -a /build.log || true) && \
     # Remove package build artifacts
-    find . -name "build" -type d -exec rm -rf {} + 2>/dev/null || true && \
-    find . -name "dist" -type d -exec rm -rf {} + 2>/dev/null || true && \
+    (find . -name "build" -type d -exec rm -rf {} + 2>&1 | tee -a /build.log || true) && \
+    (find . -name "dist" -type d -exec rm -rf {} + 2>&1 | tee -a /build.log || true) && \
     # Remove README files in custom nodes (keep main ComfyUI README)
-    find ./custom_nodes -name "README*" -type f -delete 2>/dev/null || true && \
-    find ./custom_nodes -name "LICENSE*" -type f -delete 2>/dev/null || true && \
+    (find ./custom_nodes -name "README*" -type f -delete 2>&1 | tee -a /build.log || true) && \
+    (find ./custom_nodes -name "LICENSE*" -type f -delete 2>&1 | tee -a /build.log || true) && \
     # Remove any leftover temporary files
-    find . -name "*.tmp" -delete 2>/dev/null || true && \
-    find . -name "*.log" -delete 2>/dev/null || true
+    (find . -name "*.tmp" -delete 2>&1 | tee -a /build.log || true) && \
+    # Remove .log files but preserve our build log
+    (find . -name "*.log" ! -name "build.log" -delete 2>&1 | tee -a /build.log || true) && \
+    echo "Cleanup completed" >> /build.log
 
 # ============================================================================
 # Build wheels for git-cloned packages (source builds)
 # ============================================================================
 # Only build wheels for packages we installed from git (not available on PyPI)
 # PyPI packages will be resolved and installed in Stage 3
-RUN mkdir -p /wheels && \
+RUN echo "" >> /build.log && \
+    echo "=== Building Wheels ===" >> /build.log && \
+    mkdir -p /wheels && \
     # Build wheel for ComfyUI (main application)
-    cd /app/ComfyUI && pip wheel --no-deps --wheel-dir=/wheels . && \
+    (echo "Building wheel for ComfyUI" >> /build.log && \
+     cd /app/ComfyUI && pip wheel --no-deps --wheel-dir=/wheels . >> /build.log 2>&1 || \
+     (echo "FAILED: ComfyUI wheel" >> /build.log && true)) && \
     # Build wheels for custom nodes from git
-    cd /app/ComfyUI/custom_nodes/ComfyUI-Manager && pip wheel --no-deps --wheel-dir=/wheels . || true && \
-    cd /app/ComfyUI/custom_nodes/comfyui_controlnet_aux && pip wheel --no-deps --wheel-dir=/wheels . || true && \
-    cd /app/ComfyUI/custom_nodes/ComfyUI_IPAdapter_plus && pip wheel --no-deps --wheel-dir=/wheels . || true && \
-    cd /app/ComfyUI/custom_nodes/ComfyUI-Impact-Pack && pip wheel --no-deps --wheel-dir=/wheels . || true && \
-    cd /app/ComfyUI/custom_nodes/ComfyUI-Inspire-Pack && pip wheel --no-deps --wheel-dir=/wheels . || true && \
-    cd /app/ComfyUI/custom_nodes/was-node-suite-comfyui && pip wheel --no-deps --wheel-dir=/wheels . || true && \
-    cd /app/ComfyUI/custom_nodes/civitai_comfy_nodes && pip wheel --no-deps --wheel-dir=/wheels . || true
+    (echo "Building wheel for ComfyUI-Manager" >> /build.log && \
+     cd /app/ComfyUI/custom_nodes/ComfyUI-Manager && pip wheel --no-deps --wheel-dir=/wheels . >> /build.log 2>&1 || \
+     (echo "FAILED: ComfyUI-Manager wheel" >> /build.log && true)) && \
+    (echo "Building wheel for comfyui_controlnet_aux" >> /build.log && \
+     cd /app/ComfyUI/custom_nodes/comfyui_controlnet_aux && pip wheel --no-deps --wheel-dir=/wheels . >> /build.log 2>&1 || \
+     (echo "FAILED: comfyui_controlnet_aux wheel" >> /build.log && true)) && \
+    (echo "Building wheel for ComfyUI_IPAdapter_plus" >> /build.log && \
+     cd /app/ComfyUI/custom_nodes/ComfyUI_IPAdapter_plus && pip wheel --no-deps --wheel-dir=/wheels . >> /build.log 2>&1 || \
+     (echo "FAILED: ComfyUI_IPAdapter_plus wheel" >> /build.log && true)) && \
+    (echo "Building wheel for ComfyUI-Impact-Pack" >> /build.log && \
+     cd /app/ComfyUI/custom_nodes/ComfyUI-Impact-Pack && pip wheel --no-deps --wheel-dir=/wheels . >> /build.log 2>&1 || \
+     (echo "FAILED: ComfyUI-Impact-Pack wheel" >> /build.log && true)) && \
+    (echo "Building wheel for ComfyUI-Inspire-Pack" >> /build.log && \
+     cd /app/ComfyUI/custom_nodes/ComfyUI-Inspire-Pack && pip wheel --no-deps --wheel-dir=/wheels . >> /build.log 2>&1 || \
+     (echo "FAILED: ComfyUI-Inspire-Pack wheel" >> /build.log && true)) && \
+    (echo "Building wheel for was-node-suite-comfyui" >> /build.log && \
+     cd /app/ComfyUI/custom_nodes/was-node-suite-comfyui && pip wheel --no-deps --wheel-dir=/wheels . >> /build.log 2>&1 || \
+     (echo "FAILED: was-node-suite-comfyui wheel" >> /build.log && true)) && \
+    (echo "Building wheel for civitai_comfy_nodes" >> /build.log && \
+     cd /app/ComfyUI/custom_nodes/civitai_comfy_nodes && pip wheel --no-deps --wheel-dir=/wheels . >> /build.log 2>&1 || \
+     (echo "FAILED: civitai_comfy_nodes wheel" >> /build.log && true)) && \
+    echo "Wheel building completed" >> /build.log
+
+# Finalize build log
+RUN echo "" >> /build.log && \
+    echo "Build completed: $(date)" >> /build.log
 
 # ============================================================================
 # Stage 3: Test Install - Validate working state with full dependency resolution
@@ -151,7 +199,11 @@ WORKDIR /app/ComfyUI
 
 # Merge all requirements.txt files for complete dependency resolution
 # This ensures pip resolves all dependencies together in one pass
-RUN find . -name "requirements.txt" -type f -exec cat {} \; | sort -u > /combined-all-requirements.txt && \
+RUN find . -name "requirements.txt" -type f -exec cat {} \; | \
+    grep -vE 'facebookresearch/sam2(torch|matplotlib)' | \
+    sort -u | \
+    sed -E 's/^jax([^a-zA-Z0-9_-].*|$)/jax[cuda13]/' \
+    > /combined-all-requirements.txt && \
     echo "=== Combined all requirements ===" && \
     cat /combined-all-requirements.txt
 
@@ -177,8 +229,11 @@ COPY --from=baseline /baseline.txt /baseline.txt
 COPY --from=validator /final-working.txt /final-working.txt
 COPY --from=validator /wheels /wheels
 
-# Copy ComfyUI application from builder
+# Copy ComfyUI application and build log from builder
+# Build log contains output from all optional components (custom nodes, wheels, cleanup)
+# Available at: /app/ComfyUI/build.log
 COPY --from=builder /app/ComfyUI /app/ComfyUI
+COPY --from=builder /build.log /app/ComfyUI/build.log
 
 # Install runtime system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
