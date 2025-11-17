@@ -49,47 +49,62 @@ RUN git clone https://github.com/comfyanonymous/ComfyUI.git /app/ComfyUI
 WORKDIR /app/ComfyUI/custom_nodes
 RUN git clone https://github.com/ltdrdata/ComfyUI-Manager.git
 
-# Clone popular custom nodes
-# Using || true to prevent build failures from optional nodes
-
-# ComfyUI-ControlNet-Preprocessors
-RUN echo "=== Cloning comfyui_controlnet_aux ===" >> /build.log && \
-    git clone https://github.com/Fannovel16/comfyui_controlnet_aux.git >> /build.log 2>&1 || \
-    (echo "FAILED: comfyui_controlnet_aux" >> /build.log && true)
-
 # ComfyUI-IPAdapter-plus
 RUN echo "=== Cloning ComfyUI_IPAdapter_plus ===" >> /build.log && \
     git clone https://github.com/cubiq/ComfyUI_IPAdapter_plus.git >> /build.log 2>&1 || \
     (echo "FAILED: ComfyUI_IPAdapter_plus" >> /build.log && true)
-
-# ComfyUI-Impact-Pack (image processing utilities)
-RUN echo "=== Cloning ComfyUI-Impact-Pack ===" >> /build.log && \
-    git clone https://github.com/ltdrdata/ComfyUI-Impact-Pack.git >> /build.log 2>&1 || \
-    (echo "FAILED: ComfyUI-Impact-Pack" >> /build.log && true)
-
-# ComfyUI-Inspire-Pack (additional utility nodes)
-RUN echo "=== Cloning ComfyUI-Inspire-Pack ===" >> /build.log && \
-    git clone https://github.com/ltdrdata/ComfyUI-Inspire-Pack.git >> /build.log 2>&1 || \
-    (echo "FAILED: ComfyUI-Inspire-Pack" >> /build.log && true)
-
-# WAS Node Suite (extensive node collection)
-RUN echo "=== Cloning was-node-suite-comfyui ===" >> /build.log && \
-    git clone https://github.com/WASasquatch/was-node-suite-comfyui.git >> /build.log 2>&1 || \
-    (echo "FAILED: was-node-suite-comfyui" >> /build.log && true)
 
 # Civitai ComfyUI nodes (model loader from Civitai using AIR identifiers)
 RUN echo "=== Cloning civitai_comfy_nodes ===" >> /build.log && \
     git clone https://github.com/civitai/civitai_comfy_nodes.git >> /build.log 2>&1 || \
     (echo "FAILED: civitai_comfy_nodes" >> /build.log && true)
 
-# Merge all requirements.txt files for build dependencies
+# Merge all requirements.txt files and extract dependencies from pyproject.toml files
 # This ensures pip resolves all dependencies together, avoiding version conflicts
 WORKDIR /app/ComfyUI
-RUN find . -name "requirements.txt" -type f -exec cat {} \; | \
+
+# Extract dependencies from pyproject.toml files using Python's tomllib
+RUN python3 << 'PYEOF' > /pyproject-dependencies.txt
+import tomllib
+from pathlib import Path
+
+dependencies = []
+for pyproject_file in Path(".").rglob("pyproject.toml"):
+    try:
+        with open(pyproject_file, "rb") as f:
+            data = tomllib.load(f)
+            # Extract project.dependencies
+            if "project" in data and "dependencies" in data["project"]:
+                deps = data["project"]["dependencies"]
+            if isinstance(deps, list):
+                dependencies.extend(deps)
+            # Extract optional dependencies if present
+            if "project" in data and "optional-dependencies" in data["project"]:
+                for group, deps in data["project"]["optional-dependencies"].items():
+                    if isinstance(deps, list):
+                        dependencies.extend(deps)
+    except Exception as e:
+        # Skip files that can't be parsed
+        print(f"# Skipping {pyproject_file}: {e}", file=__import__('sys').stderr)
+        continue
+
+# Print unique dependencies
+for dep in sorted(set(dependencies)):
+    # Skip invalid git URLs that aren't PEP 508 compliant
+    if dep.startswith("git+"):
+        continue
+    print(dep)
+PYEOF
+
+# Combine requirements.txt and pyproject.toml dependencies
+RUN cat /pyproject-dependencies.txt > /combined-build-requirements.txt && \
+    find . -name "requirements.txt" -type f -exec cat {} \; >> /combined-build-requirements.txt && \
+    cat /combined-build-requirements.txt | \
     grep -vE 'facebookresearch/sam2(torch|matplotlib)' | \
     sort -u | \
     sed -E 's/^jax([^a-zA-Z0-9_-].*|$)/jax[cuda13]/' \
-    > /combined-build-requirements.txt && \
+    > /combined-build-requirements-final.txt && \
+    mv /combined-build-requirements-final.txt /combined-build-requirements.txt && \
     echo "=== Combined build requirements ===" && \
     cat /combined-build-requirements.txt
 
@@ -103,18 +118,8 @@ RUN pip install --constraint /etc/pip/constraint.txt --no-cache-dir -r /combined
 RUN echo "" >> /build.log && \
     echo "=== Cleanup Phase ===" >> /build.log && \
     cd /app/ComfyUI && \
-    # Remove all .git directories (version control history not needed at runtime)
-    (find . -type d -name ".git" -exec rm -rf {} + 2>&1 | tee -a /build.log || true) && \
     # Remove pytest cache
     (find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>&1 | tee -a /build.log || true) && \
-    # Remove test directories (not needed at runtime)
-    (find ./custom_nodes -type d -name "tests" -exec rm -rf {} + 2>&1 | tee -a /build.log || true) && \
-    (find ./custom_nodes -type d -name "test" -exec rm -rf {} + 2>&1 | tee -a /build.log || true) && \
-    # Remove example directories (can be large)
-    (find ./custom_nodes -type d -name "examples" -exec rm -rf {} + 2>&1 | tee -a /build.log || true) && \
-    (find ./custom_nodes -type d -name "example" -exec rm -rf {} + 2>&1 | tee -a /build.log || true) && \
-    # Remove documentation source files (keep built docs if any)
-    (find ./custom_nodes -type d -name "docs" -exec rm -rf {} + 2>&1 | tee -a /build.log || true) && \
     # Remove CI/CD configuration files
     (find . -name ".github" -type d -exec rm -rf {} + 2>&1 | tee -a /build.log || true) && \
     (find . -name ".gitlab-ci.yml" -delete 2>&1 | tee -a /build.log || true) && \
@@ -126,53 +131,11 @@ RUN echo "" >> /build.log && \
     (find . -name ".pylintrc" -delete 2>&1 | tee -a /build.log || true) && \
     (find . -name ".flake8" -delete 2>&1 | tee -a /build.log || true) && \
     (find . -name ".mypy_cache" -type d -exec rm -rf {} + 2>&1 | tee -a /build.log || true) && \
-    # Remove package build artifacts
-    (find . -name "build" -type d -exec rm -rf {} + 2>&1 | tee -a /build.log || true) && \
-    (find . -name "dist" -type d -exec rm -rf {} + 2>&1 | tee -a /build.log || true) && \
-    # Remove README files in custom nodes (keep main ComfyUI README)
-    (find ./custom_nodes -name "README*" -type f -delete 2>&1 | tee -a /build.log || true) && \
-    (find ./custom_nodes -name "LICENSE*" -type f -delete 2>&1 | tee -a /build.log || true) && \
     # Remove any leftover temporary files
     (find . -name "*.tmp" -delete 2>&1 | tee -a /build.log || true) && \
     # Remove .log files but preserve our build log
     (find . -name "*.log" ! -name "build.log" -delete 2>&1 | tee -a /build.log || true) && \
     echo "Cleanup completed" >> /build.log
-
-# ============================================================================
-# Build wheels for git-cloned packages (source builds)
-# ============================================================================
-# Only build wheels for packages we installed from git (not available on PyPI)
-# PyPI packages will be resolved and installed in Stage 3
-RUN echo "" >> /build.log && \
-    echo "=== Building Wheels ===" >> /build.log && \
-    mkdir -p /wheels && \
-    # Build wheel for ComfyUI (main application)
-    (echo "Building wheel for ComfyUI" >> /build.log && \
-     cd /app/ComfyUI && pip wheel --no-deps --wheel-dir=/wheels . >> /build.log 2>&1 || \
-     (echo "FAILED: ComfyUI wheel" >> /build.log && true)) && \
-    # Build wheels for custom nodes from git
-    (echo "Building wheel for ComfyUI-Manager" >> /build.log && \
-     cd /app/ComfyUI/custom_nodes/ComfyUI-Manager && pip wheel --no-deps --wheel-dir=/wheels . >> /build.log 2>&1 || \
-     (echo "FAILED: ComfyUI-Manager wheel" >> /build.log && true)) && \
-    (echo "Building wheel for comfyui_controlnet_aux" >> /build.log && \
-     cd /app/ComfyUI/custom_nodes/comfyui_controlnet_aux && pip wheel --no-deps --wheel-dir=/wheels . >> /build.log 2>&1 || \
-     (echo "FAILED: comfyui_controlnet_aux wheel" >> /build.log && true)) && \
-    (echo "Building wheel for ComfyUI_IPAdapter_plus" >> /build.log && \
-     cd /app/ComfyUI/custom_nodes/ComfyUI_IPAdapter_plus && pip wheel --no-deps --wheel-dir=/wheels . >> /build.log 2>&1 || \
-     (echo "FAILED: ComfyUI_IPAdapter_plus wheel" >> /build.log && true)) && \
-    (echo "Building wheel for ComfyUI-Impact-Pack" >> /build.log && \
-     cd /app/ComfyUI/custom_nodes/ComfyUI-Impact-Pack && pip wheel --no-deps --wheel-dir=/wheels . >> /build.log 2>&1 || \
-     (echo "FAILED: ComfyUI-Impact-Pack wheel" >> /build.log && true)) && \
-    (echo "Building wheel for ComfyUI-Inspire-Pack" >> /build.log && \
-     cd /app/ComfyUI/custom_nodes/ComfyUI-Inspire-Pack && pip wheel --no-deps --wheel-dir=/wheels . >> /build.log 2>&1 || \
-     (echo "FAILED: ComfyUI-Inspire-Pack wheel" >> /build.log && true)) && \
-    (echo "Building wheel for was-node-suite-comfyui" >> /build.log && \
-     cd /app/ComfyUI/custom_nodes/was-node-suite-comfyui && pip wheel --no-deps --wheel-dir=/wheels . >> /build.log 2>&1 || \
-     (echo "FAILED: was-node-suite-comfyui wheel" >> /build.log && true)) && \
-    (echo "Building wheel for civitai_comfy_nodes" >> /build.log && \
-     cd /app/ComfyUI/custom_nodes/civitai_comfy_nodes && pip wheel --no-deps --wheel-dir=/wheels . >> /build.log 2>&1 || \
-     (echo "FAILED: civitai_comfy_nodes wheel" >> /build.log && true)) && \
-    echo "Wheel building completed" >> /build.log
 
 # Finalize build log
 RUN echo "" >> /build.log && \
@@ -183,8 +146,7 @@ RUN echo "" >> /build.log && \
 # ============================================================================
 FROM nvcr.io/nvidia/pytorch:25.10-py3 AS validator
 
-# Copy wheels and ComfyUI application from builder
-COPY --from=builder /wheels /wheels
+# Copy ComfyUI application and wheels from builder
 COPY --from=builder /app/ComfyUI /app/ComfyUI
 
 # Install system dependencies needed for some packages
@@ -197,13 +159,49 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # This replicates the complete Stage 2 environment with full dependency resolution
 WORKDIR /app/ComfyUI
 
-# Merge all requirements.txt files for complete dependency resolution
+# Extract dependencies from pyproject.toml files using Python's tomllib
+RUN python3 << 'PYEOF' > /pyproject-dependencies.txt
+import tomllib
+from pathlib import Path
+
+dependencies = []
+for pyproject_file in Path(".").rglob("pyproject.toml"):
+    try:
+        with open(pyproject_file, "rb") as f:
+            data = tomllib.load(f)
+            # Extract project.dependencies
+            if "project" in data and "dependencies" in data["project"]:
+                deps = data["project"]["dependencies"]
+            if isinstance(deps, list):
+                dependencies.extend(deps)
+            # Extract optional dependencies if present
+            if "project" in data and "optional-dependencies" in data["project"]:
+                for group, deps in data["project"]["optional-dependencies"].items():
+                    if isinstance(deps, list):
+                        dependencies.extend(deps)
+    except Exception as e:
+        # Skip files that can't be parsed
+        print(f"# Skipping {pyproject_file}: {e}", file=__import__('sys').stderr)
+        continue
+
+# Print unique dependencies
+for dep in sorted(set(dependencies)):
+    # Skip invalid git URLs that aren't PEP 508 compliant
+    if dep.startswith("git+"):
+        continue
+    print(dep)
+PYEOF
+
+# Combine requirements.txt and pyproject.toml dependencies for complete dependency resolution
 # This ensures pip resolves all dependencies together in one pass
-RUN find . -name "requirements.txt" -type f -exec cat {} \; | \
+RUN cat /pyproject-dependencies.txt > /combined-all-requirements.txt && \
+    find . -name "requirements.txt" -type f -exec cat {} \; >> /combined-all-requirements.txt && \
+    cat /combined-all-requirements.txt | \
     grep -vE 'facebookresearch/sam2(torch|matplotlib)' | \
     sort -u | \
     sed -E 's/^jax([^a-zA-Z0-9_-].*|$)/jax[cuda13]/' \
-    > /combined-all-requirements.txt && \
+    > /combined-all-requirements-final.txt && \
+    mv /combined-all-requirements-final.txt /combined-all-requirements.txt && \
     echo "=== Combined all requirements ===" && \
     cat /combined-all-requirements.txt
 
@@ -211,9 +209,9 @@ RUN find . -name "requirements.txt" -type f -exec cat {} \; | \
 # Single installation pass prevents version conflicts and allows full dependency resolution
 RUN pip install --no-cache-dir -r /combined-all-requirements.txt
 
-# Install source-built wheels (our git packages) at the end
-# This ensures our custom packages are installed after their dependencies
-RUN pip install --no-cache-dir --find-links=/wheels /wheels/*.whl
+# Install any successfully built wheels
+# This includes comfyui_controlnet_aux which has proper packaging
+RUN pip install --no-cache-dir /wheels/*.whl 2>/dev/null || true
 
 # Capture the final working state after full dependency resolution
 # This represents a proven working configuration
@@ -227,13 +225,10 @@ FROM nvcr.io/nvidia/pytorch:25.10-py3 AS final
 # Copy package manifests from previous stages
 COPY --from=baseline /baseline.txt /baseline.txt
 COPY --from=validator /final-working.txt /final-working.txt
-COPY --from=validator /wheels /wheels
 
-# Copy ComfyUI application and build log from builder
-# Build log contains output from all optional components (custom nodes, wheels, cleanup)
-# Available at: /app/ComfyUI/build.log
+# Copy ComfyUI application
 COPY --from=builder /app/ComfyUI /app/ComfyUI
-COPY --from=builder /build.log /app/ComfyUI/build.log
+# COPY --from=builder /build.log /app/ComfyUI/build.log
 
 # Install runtime system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -267,41 +262,41 @@ RUN set -ex && \
     echo "=== Installing packages ===" && \
     # Install each package from the diff
     while IFS= read -r pkg; do \
-        # Normalize package name for comparison (replace _ with -, lowercase)
-        pkg_normalized=$(echo "$pkg" | tr '_' '-' | tr '[:upper:]' '[:lower:]'); \
-        \
-        # Double-check this package is NOT in baseline (safety check)
-        if grep -qFx "$pkg" /baseline-names.txt; then \
-            echo "ERROR: Package $pkg is in baseline, skipping!"; \
-            continue; \
-        fi; \
-        \
-        # Get the full package spec with version from final-working.txt
-        # Handle both == and @ formats
-        pkg_spec=$(grep -E "^${pkg}(==|@| @)" /final-working.txt | head -n1 || echo ""); \
-        \
-        if [ -z "$pkg_spec" ]; then \
-            echo "WARNING: Could not find spec for $pkg in final-working.txt, skipping"; \
-            continue; \
-        fi; \
-        \
-        # Check if we have a wheel for this package (try multiple name formats)
-        wheel_file=""; \
-        for name_variant in "$pkg" "$pkg_normalized" $(echo "$pkg" | tr '-' '_'); do \
-            found=$(ls /wheels/${name_variant}-*.whl 2>/dev/null | head -n1 || echo ""); \
-            if [ -n "$found" ]; then \
-                wheel_file="$found"; \
-                break; \
-            fi; \
-        done; \
-        \
-        if [ -n "$wheel_file" ]; then \
-            echo ">>> Installing from wheel: $wheel_file"; \
-            pip install --constraint /etc/pip/constraint.txt --no-deps --no-cache-dir "$wheel_file"; \
-        else \
-            echo ">>> Installing from PyPI: $pkg_spec"; \
-            pip install --constraint /etc/pip/constraint.txt --no-deps --no-cache-dir "$pkg_spec"; \
-        fi; \
+    # Normalize package name for comparison (replace _ with -, lowercase)
+    pkg_normalized=$(echo "$pkg" | tr '_' '-' | tr '[:upper:]' '[:lower:]'); \
+    \
+    # Double-check this package is NOT in baseline (safety check)
+    if grep -qFx "$pkg" /baseline-names.txt; then \
+    echo "ERROR: Package $pkg is in baseline, skipping!"; \
+    continue; \
+    fi; \
+    \
+    # Get the full package spec with version from final-working.txt
+    # Handle both == and @ formats
+    pkg_spec=$(grep -E "^${pkg}(==|@| @)" /final-working.txt | head -n1 || echo ""); \
+    \
+    if [ -z "$pkg_spec" ]; then \
+    echo "WARNING: Could not find spec for $pkg in final-working.txt, skipping"; \
+    continue; \
+    fi; \
+    \
+    # Check if we have a wheel for this package (try multiple name formats)
+    wheel_file=""; \
+    for name_variant in "$pkg" "$pkg_normalized" $(echo "$pkg" | tr '-' '_'); do \
+    found=$(ls /wheels/${name_variant}-*.whl 2>/dev/null | head -n1 || echo ""); \
+    if [ -n "$found" ]; then \
+    wheel_file="$found"; \
+    break; \
+    fi; \
+    done; \
+    \
+    if [ -n "$wheel_file" ]; then \
+    echo ">>> Installing from wheel: $wheel_file"; \
+    pip install --constraint /etc/pip/constraint.txt --no-deps --no-cache-dir "$wheel_file"; \
+    else \
+    echo ">>> Installing from PyPI: $pkg_spec"; \
+    pip install --constraint /etc/pip/constraint.txt --no-deps --no-cache-dir "$pkg_spec"; \
+    fi; \
     done < /packages-to-install.txt && \
     \
     echo "=== Installation complete ===" && \
@@ -326,14 +321,6 @@ RUN mkdir -p models/checkpoints \
     output \
     input \
     temp
-
-# Download TAESD models for high-quality previews
-# These enable better preview quality during generation vs blocky latent previews
-RUN cd models/vae_approx && \
-    curl -L -o taesd_decoder.pth https://github.com/madebyollin/taesd/raw/main/taesd_decoder.pth && \
-    curl -L -o taesdxl_decoder.pth https://github.com/madebyollin/taesd/raw/main/taesdxl_decoder.pth && \
-    curl -L -o taesd3_decoder.pth https://github.com/madebyollin/taesd/raw/main/taesd3_decoder.pth && \
-    curl -L -o taef1_decoder.pth https://github.com/madebyollin/taesd/raw/main/taef1_decoder.pth
 
 # Set permissions
 RUN chmod -R 755 /app/ComfyUI
