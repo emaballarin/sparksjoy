@@ -97,23 +97,27 @@ services:
         image: ${COMFYUI_IMAGE:-comfyui:latest-arm64}
         container_name: ${PROJECT_NAME:-comfyui}-app
         restart: unless-stopped
-        command: ["python", "main.py", "--listen", "0.0.0.0", "--port", "8188"]
         security_opt:
             - no-new-privileges:true
         networks:
             - comfyui-network
         volumes:
-            # Model storage (checkpoints, LoRAs, VAEs, ControlNet, IPAdapter, etc.)
-            - ./volumes/models:/app/ComfyUI/models:rw
+            # ComfyUI repository (full RW access, persistent across restarts)
+            - ./volumes/ComfyUI:/app/ComfyUI:rw
+
+            # Persistent data volumes (symlinked inside ComfyUI at startup)
+            # Models storage (checkpoints, LoRAs, VAEs, ControlNet, IPAdapter, etc.)
+            - ./comfyvolumes/models:/comfyvolumes/models:rw
             # Custom nodes (persistence for ComfyUI Manager installations)
-            - ./volumes/custom_nodes:/app/ComfyUI/custom_nodes:rw
-            # Generated outputs
-            - ./volumes/output:/app/ComfyUI/output:rw
+            - ./comfyvolumes/custom_nodes:/comfyvolumes/custom_nodes:rw
             # Input images
-            - ./volumes/input:/app/ComfyUI/input:rw
+            - ./comfyvolumes/input:/comfyvolumes/input:rw
+            # Generated outputs
+            - ./comfyvolumes/output:/comfyvolumes/output:rw
             # Temporary files
-            - ./volumes/temp:/app/ComfyUI/temp:rw
-            # Logs
+            - ./comfyvolumes/temp:/comfyvolumes/temp:rw
+
+            # Application logs
             - ./logs/comfyui:/app/logs:rw
         environment:
             # Timezone

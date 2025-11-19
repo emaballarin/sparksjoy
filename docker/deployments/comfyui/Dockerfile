@@ -226,13 +226,13 @@ FROM nvcr.io/nvidia/pytorch:25.10-py3 AS final
 COPY --from=baseline /baseline.txt /baseline.txt
 COPY --from=validator /final-working.txt /final-working.txt
 
-# Copy ComfyUI application
-COPY --from=builder /app/ComfyUI /app/ComfyUI
-# COPY --from=builder /build.log /app/ComfyUI/build.log
+# Note: ComfyUI will be cloned at runtime via entrypoint.sh
+# This allows the repository to be fully RW and persistent via volume mount
 
-# Install runtime system dependencies
+# Install runtime system dependencies (including git for entrypoint cloning)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    git \
     libgl1 \
     libglib2.0-0 \
     libsm6 \
@@ -303,27 +303,15 @@ RUN set -ex && \
     # Cleanup temporary files
     rm -rf /wheels /baseline.txt /final-working.txt /baseline-names.txt /final-names.txt /packages-to-install.txt
 
+# Copy entrypoint script
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 # Set working directory
 WORKDIR /app/ComfyUI
 
-# Create directories for volume mounts (will be overridden by Docker volumes)
-RUN mkdir -p models/checkpoints \
-    models/vae \
-    models/vae_approx \
-    models/loras \
-    models/upscale_models \
-    models/embeddings \
-    models/controlnet \
-    models/ipadapter \
-    models/clip \
-    models/clip_vision \
-    custom_nodes \
-    output \
-    input \
-    temp
-
-# Set permissions
-RUN chmod -R 755 /app/ComfyUI
+# Note: Directories will be created by entrypoint.sh at runtime
+# The entire /app/ComfyUI will be a volume mount
 
 # Expose ComfyUI port
 EXPOSE 8188
@@ -337,7 +325,10 @@ ENV COMFYUI_PATH=/app/ComfyUI \
     PYTHONPATH=/app/ComfyUI \
     PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
 
-# Entrypoint: Start ComfyUI server
-# Listen on all interfaces (0.0.0.0) for Docker networking
-# Use --preview-method auto for optimal preview generation
-CMD ["python", "main.py", "--listen", "0.0.0.0", "--port", "8188", "--preview-method", "auto"]
+# Entrypoint: Initialize ComfyUI and start server
+# The entrypoint script handles:
+# - Cloning ComfyUI repo if not present
+# - Creating symlinks to persistent volumes
+# - Installing custom nodes on first run
+# - Starting ComfyUI server
+ENTRYPOINT ["/entrypoint.sh"]
