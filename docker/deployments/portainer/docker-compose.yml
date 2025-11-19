@@ -1,0 +1,10 @@
+services:
+  portainer_agent:
+    container_name: portainer_agent
+    image: portainer/agent:sts
+    restart: always
+    volumes:
+      - /home/emaballarin/.local/share/docker/volumes:/var/lib/docker/volumes
+      - /run/user/1000/docker.sock:/var/run/docker.sock
+    ports:
+      - 9001:9001
