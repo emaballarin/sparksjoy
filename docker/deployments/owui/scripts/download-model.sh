@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Model Download Script for vLLM on DGX Spark
+# Model Download Script for SGLang on DGX Spark
 # =============================================================================
 # Downloads models from HuggingFace Hub with resume support and validation
 #
@@ -258,14 +258,14 @@ print_instructions() {
     echo ""
     print_info "Model ready to use!"
     echo ""
-    echo "To use this model with vLLM, update your .env file:"
-    echo "  ${BLUE}VLLM_MODEL=$MODEL_ID${NC}"
+    echo "To use this model with SGLang, update your .env file:"
+    echo "  ${BLUE}SGLANG_MODEL=$MODEL_ID${NC}"
     echo ""
-    echo "Then start/restart vLLM:"
-    echo "  ${BLUE}docker compose up -d vllm${NC}"
+    echo "Then start/restart SGLang:"
+    echo "  ${BLUE}docker compose up -d sglang${NC}"
     echo ""
     echo "Or use the full path in docker-compose.yml:"
-    echo "  ${BLUE}VLLM_MODEL=/app/models/$MODEL_ID${NC}"
+    echo "  ${BLUE}SGLANG_MODEL=/app/models/$MODEL_ID${NC}"
 }
 
 # =============================================================================
@@ -274,7 +274,7 @@ print_instructions() {
 
 main() {
     echo "════════════════════════════════════════"
-    echo "  Model Download for vLLM on DGX Spark  "
+    echo "  Model Download for SGLang on DGX Spark  "
     echo "════════════════════════════════════════"
     echo ""
 

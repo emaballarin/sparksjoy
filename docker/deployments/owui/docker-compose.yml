@@ -398,15 +398,15 @@ services:
             - "com.centurylinklabs.watchtower.scope=owui"
 
     # ==========================================================================
-    # vLLM Inference Server
+    # SGLang Inference Server
     # ==========================================================================
     # OpenAI-compatible inference server for local LLM hosting.
-    # Provides GPU-accelerated inference with vLLM engine.
-    # OpenWebUI can connect via: http://vllm:8000/v1
+    # Provides GPU-accelerated inference with SGLang engine.
+    # OpenWebUI can connect via: http://sglang:8000/v1
 
-    vllm:
-        image: nvcr.io/nvidia/vllm:${VLLM_VERSION:-25.10-py3}
-        container_name: ${PROJECT_NAME:-owui}-vllm
+    sglang:
+        image: nvcr.io/nvidia/sglang:${SGLANG_VERSION:-25.10-py3}
+        container_name: ${PROJECT_NAME:-owui}-sglang
         platform: ${PLATFORM:-linux/arm64}
         restart: ${RESTART_POLICY:-unless-stopped}
 
@@ -429,57 +429,58 @@ services:
             - HF_TOKEN=${HF_TOKEN:-}
             - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
 
-            # vLLM Server Configuration
-            - VLLM_HOST=${VLLM_HOST:-0.0.0.0}
-            - VLLM_PORT=${VLLM_PORT:-8000}
-            - VLLM_LOG_LEVEL=${VLLM_LOG_LEVEL:-info}
+            # SGLang Server Configuration
+            - SGLANG_HOST=${SGLANG_HOST:-0.0.0.0}
+            - SGLANG_PORT=${SGLANG_PORT:-8000}
+            - SGLANG_LOG_LEVEL=${SGLANG_LOG_LEVEL:-info}
 
-        # vLLM serve command with all configuration flags
+        # SGLang launch_server command with all configuration flags
         command: >
-            vllm
-            serve
-            ${VLLM_MODEL:-""}
-            --host ${VLLM_HOST:-0.0.0.0}
-            --port ${VLLM_PORT:-8000}
-            --tensor-parallel-size ${VLLM_TENSOR_PARALLEL_SIZE:-1}
-            --max-model-len ${VLLM_MAX_MODEL_LEN:-8192}
-            --max-num-seqs ${VLLM_MAX_NUM_SEQS:-256}
-            --gpu-memory-utilization ${VLLM_GPU_MEMORY_UTILIZATION:-0.3}
-            ${VLLM_QUANTIZATION:+--quantization ${VLLM_QUANTIZATION}}
-            ${VLLM_KV_CACHE_DTYPE:+--kv-cache-dtype ${VLLM_KV_CACHE_DTYPE}}
-            ${VLLM_TRUST_REMOTE_CODE:+--trust-remote-code}
-            ${VLLM_ENABLE_METRICS:+--disable-log-requests}
-            --served-model-name ${VLLM_MODEL:-""}
+            python3 -m sglang.launch_server
+            --model-path ${SGLANG_MODEL:-""}
+            --host ${SGLANG_HOST:-0.0.0.0}
+            --port ${SGLANG_PORT:-8000}
+            --tp ${SGLANG_TP:-1}
+            --context-length ${SGLANG_CONTEXT_LENGTH:-8192}
+            --max-running-requests ${SGLANG_MAX_RUNNING_REQUESTS:-256}
+            --mem-fraction-static ${SGLANG_MEM_FRACTION_STATIC:-0.3}
+            ${SGLANG_QUANTIZATION:+--quantization ${SGLANG_QUANTIZATION}}
+            ${SGLANG_KV_CACHE_DTYPE:+--kv-cache-dtype ${SGLANG_KV_CACHE_DTYPE}}
+            ${SGLANG_TRUST_REMOTE_CODE:+--trust-remote-code}
+            ${SGLANG_ENABLE_METRICS:+--enable-metrics}
+            ${SGLANG_LOG_REQUESTS:+--log-requests}
+            --log-level ${SGLANG_LOG_LEVEL:-info}
+            --served-model-name ${SGLANG_MODEL:-""}
 
         # Volume mounts
         volumes:
             # Model storage (supports both pre-downloaded and on-demand)
             - ${MODELS_VOLUME_PATH:-./volumes/models}:/app/models:rw
             # HuggingFace cache (separate from OpenWebUI cache)
-            - ${VLLM_CACHE_PATH:-./volumes/vllm-cache}:/app/cache:rw
+            - ${SGLANG_CACHE_PATH:-./volumes/sglang-cache}:/app/cache:rw
             # Logs
-            - ${VLLM_LOGS_PATH:-./logs/vllm}:/app/logs:rw
+            - ${SGLANG_LOGS_PATH:-./logs/sglang}:/app/logs:rw
 
         # Resource limits
         deploy:
             resources:
                 limits:
-                    memory: ${VLLM_MEMORY_LIMIT:-96g}
-                    cpus: "${VLLM_CPU_LIMIT:-10}"
+                    memory: ${SGLANG_MEMORY_LIMIT:-96g}
+                    cpus: "${SGLANG_CPU_LIMIT:-10}"
                 reservations:
-                    #memory: ${VLLM_MEMORY_RESERVATION:-32g}
+                    #memory: ${SGLANG_MEMORY_RESERVATION:-32g}
                     devices:
                         - driver: nvidia
-                          device_ids: ["${VLLM_GPU_DEVICE:-0}"]
+                          device_ids: ["${SGLANG_GPU_DEVICE:-0}"]
                           capabilities: [gpu]
 
         # Health check
         healthcheck:
-            test: ["CMD", "curl", "-f", "http://localhost:${VLLM_PORT:-8000}/health"]
+            test: ["CMD", "curl", "-f", "http://localhost:${SGLANG_PORT:-8000}/health"]
             interval: ${HEALTHCHECK_INTERVAL:-30s}
             timeout: ${HEALTHCHECK_TIMEOUT:-10s}
             retries: ${HEALTHCHECK_RETRIES:-3}
-            start_period: ${HEALTHCHECK_START_PERIOD_VLLM:-120s}
+            start_period: ${HEALTHCHECK_START_PERIOD_SGLANG:-120s}
 
         # Logging configuration
         logging:
@@ -487,7 +488,7 @@ services:
             options:
                 max-size: ${LOG_MAX_SIZE:-100m}
                 max-file: "${LOG_MAX_FILE:-5}"
-                labels: "service=vllm"
+                labels: "service=sglang"
                 tag: "{{.Name}}/{{.ID}}"
 
         # Network
@@ -497,10 +498,10 @@ services:
         # Docker labels
         labels:
             - "com.docker.compose.project=${PROJECT_NAME:-owui}"
-            - "service.name=vllm"
-            - "service.description=vLLM inference server"
-            - "com.vllm.service=inference-server"
-            - "com.vllm.version=latest"
+            - "service.name=sglang"
+            - "service.description=SGLang inference server"
+            - "com.sglang.service=inference-server"
+            - "com.sglang.version=latest"
             # Watchtower auto-update
             - "com.centurylinklabs.watchtower.enable=true"
             - "com.centurylinklabs.watchtower.scope=owui"

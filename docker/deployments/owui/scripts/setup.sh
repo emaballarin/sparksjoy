@@ -258,12 +258,12 @@ DIRECTORIES=(
     "volumes/cache"
     "volumes/chroma"
     "volumes/models"
-    "volumes/vllm-cache"
+    "volumes/sglang-cache"
     "volumes/caddy-data"
     "volumes/caddy-config"
     "logs/openwebui"
     "logs/caddy"
-    "logs/vllm"
+    "logs/sglang"
     "backups"
 )
 
@@ -319,13 +319,13 @@ chmod 755 volumes/data 2>/dev/null || true
 chmod 755 volumes/cache 2>/dev/null || true
 chmod 755 volumes/chroma 2>/dev/null || true
 chmod 755 volumes/models 2>/dev/null || true
-chmod 755 volumes/vllm-cache 2>/dev/null || true
+chmod 755 volumes/sglang-cache 2>/dev/null || true
 
 # Set proper permissions for logs
 chmod 755 logs 2>/dev/null || true
 chmod 755 logs/openwebui 2>/dev/null || true
 chmod 755 logs/caddy 2>/dev/null || true
-chmod 755 logs/vllm 2>/dev/null || true
+chmod 755 logs/sglang 2>/dev/null || true
 
 # Set proper permissions for Caddy volumes
 chmod 755 volumes/caddy-data 2>/dev/null || true
@@ -432,11 +432,11 @@ echo "  • Automatic updates enabled via Watchtower (daily at 4 AM UTC)"
 echo "  • View update logs: ${BLUE}docker compose logs -f watchtower${NC}"
 echo "  • Check TROUBLESHOOTING.md for common issues"
 echo ""
-echo "💡 Optional vLLM Integration:"
+echo "💡 Optional SGLang Integration:"
 echo ""
-echo "  • Start vLLM service: ${GREEN}docker compose up -d vllm${NC}"
+echo "  • Start SGLang service: ${GREEN}docker compose up -d sglang${NC}"
 echo "  • Download a model: ${BLUE}./scripts/download-model.sh <model-id>${NC}"
-echo "  • Configure in OpenWebUI: Add OpenAI endpoint ${BLUE}http://vllm:8000/v1${NC}"
+echo "  • Configure in OpenWebUI: Add OpenAI endpoint ${BLUE}http://sglang:8000/v1${NC}"
 echo "  • Example model: ${BLUE}./scripts/download-model.sh Qwen/Qwen2.5-7B${NC}"
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
